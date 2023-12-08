@@ -1,10 +1,10 @@
 use aes_gcm::aead::{Aead, Nonce};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, KeyInit};
+use aes_gcm::{AeadCore, Aes256Gcm, Key};
 use ed25519_compact::{KeyPair, Noise, Signature};
 use ed25519_compact::{PublicKey, SecretKey};
 use hkdf::Hkdf;
-use pqc_kyber::PublicKey as pqcPublicKey;
-use pqc_kyber::{decapsulate, encapsulate, keypair, Keypair};
+use pqc_kyber::{decapsulate, encapsulate, keypair, PublicKey as pqcPublicKey};
+use rand::rngs::OsRng;
 use sha2::Sha256;
 
 // pqxdh spec: https://signal.org/docs/specifications/pqxdh/
@@ -20,33 +20,54 @@ fn main() {
 
 #[derive(Debug)]
 struct PreKeyBundle {
-    // Public ed25519 identity key
     ik: PublicKey,
-    // Public x25519 signed pre key
     spk: ed25519_compact::x25519::PublicKey,
-    // Public x25519 one time pre key
     opk: ed25519_compact::x25519::PublicKey,
-    // Signed Pre Key Signature
     spk_sig: Signature,
-    // One time Pre Key Signature
     opk_sig: Signature,
-    // post-quantum key encapsulation mechanism (kyber) public key
     pqkem: pqcPublicKey,
-    // post-quantum key encapsulation mechanism signature
     pqkem_sig: Signature,
 }
 
 #[derive(Debug)]
 struct PrivateKeyBundle {
-    // Private ed25519 identity key
     ik: SecretKey,
-    // Private ed25519 signed pre key
     spk: SecretKey,
-    // Private ed25519 one time pre key
     opk: SecretKey,
-    // post-quantum key  encapsulation private key
     pqkem: Keypair,
 }
+
+#[derive(Debug)]
+struct InitialMessage {
+    ik: PublicKey,
+    ed: ed25519_compact::x25519::PublicKey,
+    ct: [u8; pqc_kyber::KYBER_CIPHERTEXTBYTES],
+    ect: Vec<u8>,
+    nonce: Nonce<Aes256Gcm>,
+}
+
+fn secure_rng() -> OsRng {
+    OsRng
+}
+
+// Refactor encryption function for reusability
+fn encrypt_message(key: &Key<Aes256Gcm>, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let cipher = Aes256Gcm::new(key);
+    let nonce = Aes256Gcm::generate_nonce(&mut secure_rng());
+
+    cipher
+        .encrypt(&nonce, associated_data, plaintext)
+        .map_err(|_| "Error during AES encryption")
+}
+
+// Refactor decryption function for reusability
+fn decrypt_message(key: &Key<Aes256Gcm>, initial_message: &InitialMessage) -> Result<String, &'static str> {
+    let cipher = Aes256Gcm::new(key);
+
+    cipher
+        .decrypt(&initial_message.nonce, &initial_message.ect)
+        .map_err(|_| "Error during AES decryption")
+        .and_then(|plaintext| String::from_utf8(plaintext).map_err(|_| "Error converting plaintext to string"))
 
 impl PreKeyBundle {
     fn new() -> (PreKeyBundle, PrivateKeyBundle) {
