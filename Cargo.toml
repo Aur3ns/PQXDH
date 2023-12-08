@@ -1,5 +1,5 @@
 [dependencies]
-aes-gcm = "0.10"
+aria-gcm = "0.1.0"
 ed25519-compact = "0.4"
 hkdf = "0.11"
 pqc-kyber = "0.7"
