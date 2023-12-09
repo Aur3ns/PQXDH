@@ -48,7 +48,8 @@ fn secure_rng() -> OsRng {
 
 fn encrypt_message(key: &Aria256Key, plaintext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
     let cipher = Aria256Gcm::new(key);
-    let nonce = Aria256Gcm::generate_nonce(&mut secure_rng());
+    let mut rng = secure_rng();
+    let nonce = Aria256Gcm::generate_nonce(&mut rng);
 
     cipher
         .encrypt(&nonce, associated_data, plaintext)
@@ -143,10 +144,10 @@ impl InitialMessage {
         let cipher = Aria256Gcm::new(key);
 
         let nonce = Aria256Gcm::generate_nonce(&mut secure_rng());
-        let associated_data = [pkb.ik.as_ref(), &pkb.spk.as_ref(), &pkb.opk.as_ref()].concat();
+        let associated_data = [pkb.ik.as_ref(), pkb.spk.as_ref(), pkb.opk.as_ref()].join(&[]);
         let ciphertext = cipher
             .encrypt(&nonce, &associated_data, b"totally secret first message".as_ref())
-            .map_err(|_| "Error during ARIA encryption")?;
+            .map_err(|e| format!("Error during ARIA encryption: {}", e))
 
         Ok(InitialMessage {
             ik: alice_ed_ik.pk,
