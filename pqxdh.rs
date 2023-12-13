@@ -37,9 +37,9 @@ struct InitialMessage {
 }
 
 fn main() {
-    let bob_key_bundle = PreKeyBundle::new();
-    let initial_message = InitialMessage::alice_handle_pre_key(&bob_key_bundle.0, &bob_key_bundle.1);
-    bob_handle_initial_message(&initial_message, &bob_key_bundle.1);
+    let (bob_key_bundle, private_key_bundle) = PreKeyBundle::new();
+    let initial_message = InitialMessage::alice_handle_pre_key(&bob_key_bundle, &private_key_bundle);
+    bob_handle_initial_message(&initial_message, &private_key_bundle, &bob_key_bundle);
 }
 
 fn secure_rng() -> OsRng {
@@ -151,7 +151,8 @@ impl InitialMessage {
     }
 }
 
-fn bob_handle_initial_message(im: &InitialMessage, skb: &PrivateKeyBundle) {
+
+fn bob_handle_initial_message(im: &InitialMessage, skb: &PrivateKeyBundle, pkb: &PreKeyBundle) {
     let alice_ik_x25519 = ed25519_compact::x25519::PublicKey::from_ed25519(&im.ik).unwrap();
     let bob_ik_x25519 = ed25519_compact::x25519::SecretKey::from_ed25519(&skb.ik).unwrap();
     let bob_opk_x25519 = ed25519_compact::x25519::SecretKey::from_ed25519(&skb.opk).unwrap();
