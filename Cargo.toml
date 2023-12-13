@@ -1,7 +1,15 @@
+[package]
+name = "pqxdh"
+version = "0.1.0"
+edition = "2021"
+
 [dependencies]
 aria-gcm = "0.1.0"
-ed25519-compact = "0.4"
-hkdf = "0.11"
-pqc-kyber = "0.7"
-rand = "0.8"
-sha2 = "0.10"
+ed25519-compact = "0.4.0"
+pqc-kem = "0.1.0"
+rand = "0.8.5"
+sha3 = "0.9.1"
+hkdf = "0.10.4"
+
+[features]
+default = ["std"]
