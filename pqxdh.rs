@@ -137,6 +137,7 @@ impl InitialMessage {
         println!("Please enter the message to encrypt:");
         let mut user_message = String::new();
         std::io::stdin().read_line(&mut user_message).expect("Failed to read line");
+        let user_message = user_message.trim_end(); // Remove the newline character
 
         let ciphertext = cipher
             .encrypt(&nonce, &associated_data, user_message.as_bytes())
