@@ -133,8 +133,13 @@ impl InitialMessage {
 
         let associated_data = [pkb.ik.as_ref(), pkb.spk.as_ref(), pkb.opk.as_ref()].concat();
 
+        // Ask the user for the message to encrypt
+        println!("Please enter the message to encrypt:");
+        let mut user_message = String::new();
+        std::io::stdin().read_line(&mut user_message).expect("Failed to read line");
+
         let ciphertext = cipher
-            .encrypt(&nonce, &associated_data, b"totally secret first message".as_ref())
+            .encrypt(&nonce, &associated_data, user_message.as_bytes())
             .map_err(|e| format!("Error during ARIA encryption: {}", e))?;
 
         let message_data = [pkb.ik.as_ref(), pkb.spk.as_ref(), pkb.opk.as_ref(), &ct, &ciphertext, &nonce.to_bytes()].concat();
