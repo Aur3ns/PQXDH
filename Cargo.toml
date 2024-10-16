@@ -1,6 +1,6 @@
 [package]
 name = "pqxdh"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -10,6 +10,8 @@ pqc-kem = "0.1.0"
 rand = "0.8.5"
 sha3 = "0.9.1"
 hkdf = "0.10.4"
+thiserror = "1.0.37" 
+anyhow = "1.0.68"    
 
 [features]
 default = ["std"]
