@@ -4,14 +4,13 @@ version = "0.1.1"
 edition = "2021"
 
 [dependencies]
-aria-gcm = "0.1.0"
-ed25519-compact = "0.4.0"
-pqc-kem = "0.1.0"
+aes-gcm = "0.9"  
+ed25519-compact = "2.1.1"
+pqcrypto = "0.17.0"
 rand = "0.8.5"
 sha3 = "0.9.1"
-hkdf = "0.10.4"
 thiserror = "1.0.37" 
 anyhow = "1.0.68"    
 
-[features]
-default = ["std"]
+#[features]
+#default = ["std"]
