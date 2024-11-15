@@ -7,3 +7,6 @@ mkdir build && cd build
 cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_USE_OPENSSL=ON ..
 make -j$(nproc)
 sudo make install
+cd ..
+cd ..
+make
