@@ -1,7 +1,7 @@
 #include "pqxdh.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-
 
 // Fonction pour générer un nonce sécurisé
 void generate_nonce(unsigned char *nonce, size_t size) {
@@ -34,15 +34,18 @@ int is_nonce_used(NonceTracker *tracker, const unsigned char *nonce) {
     return 0;
 }
 
-// Fonction pour stocker le nonce utilisé
+// Fonction pour marquer un nonce comme utilisé
 void mark_nonce_used(NonceTracker *tracker, const unsigned char *nonce) {
     if (tracker->count < MAX_USED_OPKS) {
         memcpy(tracker->used_nonces[tracker->count], nonce, AES_NONCE_BYTES);
         tracker->count++;
+    } else {
+        fprintf(stderr, "Erreur : limite des nonces utilisés atteinte\n");
+        exit(EXIT_FAILURE);
     }
 }
 
-// Fonction pour SHAKE256 pour dériver la clé
+// Fonction pour SHAKE256 pour dériver une clé
 void derive_key_shake256(const unsigned char *input, size_t input_len, unsigned char *output, size_t output_len) {
     EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
     if (!mdctx) {
@@ -53,6 +56,30 @@ void derive_key_shake256(const unsigned char *input, size_t input_len, unsigned 
     EVP_DigestUpdate(mdctx, input, input_len);
     EVP_DigestFinalXOF(mdctx, output, output_len);
     EVP_MD_CTX_free(mdctx);
+}
+
+// Initialisation des pré-clés et des clés privées
+void init_pre_key_bundle(PreKeyBundle *pkb, PrivateKeyBundle *skb) {
+    // Génération des clés Ed25519 et Curve25519
+    crypto_sign_keypair(pkb->ik, skb->ik);
+    crypto_sign_keypair(pkb->spk, skb->spk);
+    crypto_sign_keypair(pkb->opk, skb->opk);
+
+    // Signature des pré-clés avec la clé d'identité
+    crypto_sign_detached(pkb->spk_sig, NULL, pkb->spk, crypto_scalarmult_curve25519_BYTES, skb->ik);
+    crypto_sign_detached(pkb->opk_sig, NULL, pkb->opk, crypto_scalarmult_curve25519_BYTES, skb->ik);
+
+    // Calcul des identifiants uniques pour les pré-clés
+    compute_key_id(pkb->spk, crypto_scalarmult_curve25519_BYTES, pkb->spk_id);
+    compute_key_id(pkb->opk, crypto_scalarmult_curve25519_BYTES, pkb->opk_id);
+
+    // Initialisation de la clé Kyber (KEM)
+    pkb->pqkem = OQS_KEM_new(OQS_KEM_alg_kyber_1024);
+    if (!pkb->pqkem) {
+        fprintf(stderr, "Erreur : échec d'initialisation de Kyber KEM\n");
+        exit(EXIT_FAILURE);
+    }
+    OQS_KEM_keypair(pkb->pqkem, pkb->pqkem_public, skb->pqkem_private);
 }
 
 // Fonction principale de l'échange de clés
@@ -67,7 +94,7 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
         return -1;
     }
 
-    // Calcul des DH
+    // Calcul des valeurs Diffie-Hellman (DH1, DH2, DH3, DH4)
     unsigned char dh1[crypto_scalarmult_BYTES];
     unsigned char dh2[crypto_scalarmult_BYTES];
     unsigned char dh3[crypto_scalarmult_BYTES];
@@ -81,7 +108,7 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
         return -1;
     }
 
-    // Concaténation des DH et dérivation de clé
+    // Concaténation des DH et dérivation de la clé AES
     unsigned char key_material[AES_KEY_BYTES];
     unsigned char input[sizeof(dh1) + sizeof(dh2) + sizeof(dh3) + sizeof(dh4) + sizeof(pkb->shared_secret_bytes)];
     memcpy(input, dh1, sizeof(dh1));
@@ -92,7 +119,7 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
 
     derive_key_shake256(input, sizeof(input), key_material, AES_KEY_BYTES);
 
-    // Clé dérivée avec succès
+    // Simulation d'envoi de la clé dérivée (utiliser pour le chiffrement)
+    printf("Clé dérivée avec succès\n");
     return 0;
 }
-
