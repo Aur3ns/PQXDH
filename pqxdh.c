@@ -1,4 +1,7 @@
 #include "pqxdh.h"
+#include <stdio.h>
+#include <string.h>
+
 
 // Fonction pour générer un nonce sécurisé
 void generate_nonce(unsigned char *nonce, size_t size) {
