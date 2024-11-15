@@ -50,6 +50,8 @@ void test_diffie_hellman() {
 }
 
 void test_encryption_decryption() {
+    printf("Début du test de chiffrement/déchiffrement\n");
+
     unsigned char key[AES_KEY_BYTES];
     RAND_bytes(key, AES_KEY_BYTES);
 
@@ -59,21 +61,48 @@ void test_encryption_decryption() {
     unsigned char nonce[AES_NONCE_BYTES];
     unsigned char associated_data[] = "Données associées";
 
+    printf("Clé AES : ");
+    for (int i = 0; i < AES_KEY_BYTES; i++) printf("%02x", key[i]);
+    printf("\n");
+
+    printf("Chiffrement en cours...\n");
     int ciphertext_len = encrypt_message(key, plaintext, strlen((char *)plaintext),
                                          associated_data, sizeof(associated_data),
                                          ciphertext, nonce);
 
+    if (ciphertext_len < 0) {
+        printf("Erreur lors du chiffrement\n");
+        return;
+    }
+
+    printf("Nonce utilisé : ");
+    for (int i = 0; i < AES_NONCE_BYTES; i++) printf("%02x", nonce[i]);
+    printf("\n");
+
+    printf("Données associées (chiffrement) : %s\n", associated_data);
+
+    printf("Déchiffrement en cours...\n");
+    NonceTracker tracker = {0};
     int decrypted_len = decrypt_message(key, ciphertext, ciphertext_len,
                                         associated_data, sizeof(associated_data),
-                                        nonce, decrypted, NULL);
+                                        nonce, decrypted, &tracker);
 
-    decrypted[decrypted_len] = '\0';
+    if (decrypted_len >= 0) {
+        decrypted[decrypted_len] = '\0';
+        printf("Texte déchiffré : %s\n", decrypted);
+    } else {
+        printf("Erreur de déchiffrement\n");
+    }
+
+    printf("Données associées (déchiffrement) : %s\n", associated_data);
 
     if (strcmp((char *)plaintext, (char *)decrypted) == 0) {
         printf("Test chiffrement/déchiffrement : PASS\n");
     } else {
         printf("Test chiffrement/déchiffrement : FAIL\n");
     }
+
+    printf("Fin du test de chiffrement/déchiffrement\n");
 }
 
 int main() {

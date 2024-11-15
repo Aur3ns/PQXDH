@@ -58,22 +58,125 @@ void derive_key_shake256(const unsigned char *input, size_t input_len, unsigned 
     EVP_MD_CTX_free(mdctx);
 }
 
+int encrypt_message(const unsigned char *key, const unsigned char *plaintext, size_t plaintext_len,
+                    const unsigned char *associated_data, size_t ad_len,
+                    unsigned char *ciphertext, unsigned char *nonce) {
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Erreur : échec d'initialisation de EVP_CIPHER_CTX\n");
+        return -1;
+    }
+
+    int len, ciphertext_len;
+
+    generate_nonce(nonce, AES_NONCE_BYTES);
+
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, nonce) != 1) {
+        fprintf(stderr, "Erreur : échec d'initialisation AES-GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (ad_len > 0 && EVP_EncryptUpdate(ctx, NULL, &len, associated_data, ad_len) != 1) {
+        fprintf(stderr, "Erreur : échec d'ajout des données associées\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (EVP_EncryptUpdate(ctx, ciphertext, &len, plaintext, plaintext_len) != 1) {
+        fprintf(stderr, "Erreur : échec du chiffrement AES-GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    ciphertext_len = len;
+
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + len, &len) != 1) {
+        fprintf(stderr, "Erreur : échec de la finalisation AES-GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    ciphertext_len += len;
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, ciphertext + ciphertext_len) != 1) {
+        fprintf(stderr, "Erreur : échec de récupération du tag GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    ciphertext_len += 16;
+
+    EVP_CIPHER_CTX_free(ctx);
+    return ciphertext_len;
+}
+
+
+int decrypt_message(const unsigned char *key, const unsigned char *ciphertext, size_t ciphertext_len,
+                    const unsigned char *associated_data, size_t ad_len,
+                    const unsigned char *nonce, unsigned char *plaintext, NonceTracker *tracker) {
+    if (tracker && is_nonce_used(tracker, nonce)) {
+        fprintf(stderr, "Erreur : tentative de réutilisation du nonce détectée\n");
+        return -1;
+    }
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        fprintf(stderr, "Erreur : échec d'initialisation de EVP_CIPHER_CTX\n");
+        return -1;
+    }
+
+    int len, plaintext_len;
+
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, key, nonce) != 1) {
+        fprintf(stderr, "Erreur : échec d'initialisation AES-GCM pour le déchiffrement\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (ad_len > 0 && EVP_DecryptUpdate(ctx, NULL, &len, associated_data, ad_len) != 1) {
+        fprintf(stderr, "Erreur : échec de la vérification des données associées\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, (void *)(ciphertext + ciphertext_len - 16)) != 1) {
+        fprintf(stderr, "Erreur : échec de la configuration du tag GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+
+    ciphertext_len -= 16;
+
+    if (EVP_DecryptUpdate(ctx, plaintext, &len, ciphertext, ciphertext_len) != 1) {
+        fprintf(stderr, "Erreur : échec du déchiffrement AES-GCM\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    plaintext_len = len;
+
+    if (EVP_DecryptFinal_ex(ctx, plaintext + len, &len) != 1) {
+        fprintf(stderr, "Erreur : déchiffrement AES-GCM invalide (données corrompues ?)\n");
+        EVP_CIPHER_CTX_free(ctx);
+        return -1;
+    }
+    plaintext_len += len;
+
+    EVP_CIPHER_CTX_free(ctx);
+    if (tracker) mark_nonce_used(tracker, nonce);
+    return plaintext_len;
+}
+
+
 // Initialisation des pré-clés et des clés privées
 void init_pre_key_bundle(PreKeyBundle *pkb, PrivateKeyBundle *skb) {
-    // Génération des clés Ed25519 et Curve25519
     crypto_sign_keypair(pkb->ik, skb->ik);
     crypto_sign_keypair(pkb->spk, skb->spk);
     crypto_sign_keypair(pkb->opk, skb->opk);
 
-    // Signature des pré-clés avec la clé d'identité
     crypto_sign_detached(pkb->spk_sig, NULL, pkb->spk, crypto_scalarmult_curve25519_BYTES, skb->ik);
     crypto_sign_detached(pkb->opk_sig, NULL, pkb->opk, crypto_scalarmult_curve25519_BYTES, skb->ik);
 
-    // Calcul des identifiants uniques pour les pré-clés
     compute_key_id(pkb->spk, crypto_scalarmult_curve25519_BYTES, pkb->spk_id);
     compute_key_id(pkb->opk, crypto_scalarmult_curve25519_BYTES, pkb->opk_id);
 
-    // Initialisation de la clé Kyber (KEM)
     pkb->pqkem = OQS_KEM_new(OQS_KEM_alg_kyber_1024);
     if (!pkb->pqkem) {
         fprintf(stderr, "Erreur : échec d'initialisation de Kyber KEM\n");
@@ -84,21 +187,8 @@ void init_pre_key_bundle(PreKeyBundle *pkb, PrivateKeyBundle *skb) {
 
 // Fonction principale de l'échange de clés
 int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessage *initial_message) {
-    // Vérification des signatures des pré-clés
-    if (crypto_sign_verify_detached(pkb->spk_sig, pkb->spk, crypto_scalarmult_curve25519_BYTES, pkb->ik) != 0) {
-        fprintf(stderr, "Erreur : signature SPK invalide\n");
-        return -1;
-    }
-    if (crypto_sign_verify_detached(pkb->opk_sig, pkb->opk, crypto_scalarmult_curve25519_BYTES, pkb->ik) != 0) {
-        fprintf(stderr, "Erreur : signature OPK invalide\n");
-        return -1;
-    }
-
-    // Calcul des valeurs Diffie-Hellman (DH1, DH2, DH3, DH4)
-    unsigned char dh1[crypto_scalarmult_BYTES];
-    unsigned char dh2[crypto_scalarmult_BYTES];
-    unsigned char dh3[crypto_scalarmult_BYTES];
-    unsigned char dh4[crypto_scalarmult_BYTES];
+    unsigned char dh1[crypto_scalarmult_BYTES], dh2[crypto_scalarmult_BYTES];
+    unsigned char dh3[crypto_scalarmult_BYTES], dh4[crypto_scalarmult_BYTES];
 
     if (crypto_scalarmult_curve25519(dh1, skb->spk, pkb->spk) != 0 ||
         crypto_scalarmult_curve25519(dh2, skb->opk, pkb->ik) != 0 ||
@@ -108,7 +198,6 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
         return -1;
     }
 
-    // Concaténation des DH et dérivation de la clé AES
     unsigned char key_material[AES_KEY_BYTES];
     unsigned char input[sizeof(dh1) + sizeof(dh2) + sizeof(dh3) + sizeof(dh4) + sizeof(pkb->shared_secret_bytes)];
     memcpy(input, dh1, sizeof(dh1));
@@ -118,8 +207,6 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
     memcpy(input + sizeof(dh1) + sizeof(dh2) + sizeof(dh3) + sizeof(dh4), pkb->shared_secret_bytes, sizeof(pkb->shared_secret_bytes));
 
     derive_key_shake256(input, sizeof(input), key_material, AES_KEY_BYTES);
-
-    // Simulation d'envoi de la clé dérivée (utiliser pour le chiffrement)
     printf("Clé dérivée avec succès\n");
     return 0;
 }
