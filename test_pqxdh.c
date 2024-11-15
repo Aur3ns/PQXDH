@@ -55,7 +55,7 @@ void test_encryption_decryption() {
     unsigned char key[AES_KEY_BYTES];
     RAND_bytes(key, AES_KEY_BYTES);
 
-    unsigned char plaintext[] = "Message secret pour test";
+    unsigned char plaintext[] = "Ceci est un message de test.";
     unsigned char ciphertext[1024];
     unsigned char decrypted[1024];
     unsigned char nonce[AES_NONCE_BYTES];
