@@ -96,18 +96,3 @@ int alice_handle_pre_key(PreKeyBundle *pkb, PrivateKeyBundle *skb, InitialMessag
     return 0;
 }
 
-int main() {
-    PreKeyBundle pkb;
-    PrivateKeyBundle skb;
-    InitialMessage initial_message;
-
-    init_pre_key_bundle(&pkb, &skb);
-
-    if (alice_handle_pre_key(&pkb, &skb, &initial_message) == 0) {
-        printf("Échange de clés réussi.\n");
-    } else {
-        printf("Échec de l'échange de clés.\n");
-    }
-
-    return 0;
-}

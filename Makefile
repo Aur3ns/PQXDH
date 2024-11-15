@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -O2
-LDFLAGS = -lsodium -lssl -lcrypto -loqs
+CFLAGS = -Wall -O2 -I/usr/local/include
+LDFLAGS = -L/usr/local/lib -lsodium -lssl -lcrypto -loqs -lpthread
 
 all: test_pqxdh
 
