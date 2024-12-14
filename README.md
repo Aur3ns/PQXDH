@@ -90,9 +90,6 @@ Decrypted Text: Secret message for testing
 Encryption/Decryption Test: PASS
 ```
 
-
-###Done by TheBlackBird
-
 Feel free to open a pull request or create an issue in this repository.
 
 License
