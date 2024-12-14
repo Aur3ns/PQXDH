@@ -4,7 +4,8 @@
 
 **Post-Quantum Extended Diffie–Hellman (PQXDH)** is a cryptographic protocol designed to resist attacks from quantum computers. It is an evolution of the traditional **Diffie–Hellman key exchange**, extended with support for post-quantum algorithms to address the growing concerns around quantum threats. 
 
-According to the documentation, that you can find at this link : [https://signal.org/docs/specifications/pqxdh/]
+According to the documentation, that you can find at this link : https://signal.org/docs/specifications/pqxdh/
+
 PQXDH establishes a shared secret key between two parties who mutually authenticate each other based on public keys. PQXDH provides post-quantum forward secrecy and a form of cryptographic deniability but still relies on the hardness of the discrete log problem for mutual authentication in this revision of the protocol.
 
 PQXDH is designed for asynchronous settings where one user (“Bob”) is offline but has published some information to a server. Another user (“Alice”) wants to use that information to send encrypted data to Bob, and also establish a shared secret key for future communication.
