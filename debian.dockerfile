@@ -5,7 +5,7 @@ RUN \
     apt-get upgrade -y && \
     apt-get install -y astyle cmake doxygen gcc git graphviz libsodium-dev \
         libssl-dev ninja-build python3-pytest python3-pytest-xdist \
-        python3-yaml sudo unzip valgrind xsltproc
+        python3-yaml unzip valgrind xsltproc
 WORKDIR /usr/app/
 COPY "." "."
 RUN git submodule update --init
