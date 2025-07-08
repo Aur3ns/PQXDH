@@ -1,10 +1,10 @@
-FROM debian:bookworm-slim
+FROM alpine:3.22.0
 
 # Installing dependencies
 RUN \
-    apt-get update && \
-    apt-get upgrade -y && \
-    apt-get install -y \
+    apk update && \
+    apk upgrade && \
+    apk add --no-cache \
         astyle \
         cmake \
         doxygen \
@@ -12,15 +12,16 @@ RUN \
         git \
         graphviz \
         libsodium-dev \
-        libssl-dev \
+        libxslt \
+        make \
+        musl-dev \
         ninja-build \
-        python3-pytest \
-        python3-pytest-xdist \
-        python3-yaml \
+        openssl-dev \
+        py3-pytest \
+        py3-pytest-xdist \
+        py3-yaml \
         unzip \
-        valgrind \
-        xsltproc && \
-    apt-get clean
+        valgrind
 WORKDIR /usr/app/
 COPY "." "."
 RUN git submodule update --init
