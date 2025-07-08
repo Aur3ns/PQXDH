@@ -57,13 +57,15 @@ PQXDH
 ├── .dockerignore          # The Docker equivalent of .gitignore
 ├── .gitattributes         # Tells Git to checkout and push certain files with certain line endings
 ├── .gitmodules            # Organizes project submodules for Git to interpret
+├── alpine.dockerfile      # Dockerfile built on top of the alpine image
 ├── debian.dockerfile      # Dockerfile built on top of the debian-slim image
 ├── LICENSE                # Project license
 ├── Makefile               # Makefile for automating compilation
 ├── pqxdh.c                # Implementation of PQXDH functions
 ├── pqxdh.h                # Header file with structures and function prototypes
 ├── README.md              # The explanatory file you're currently reading
-├── run-debian.sh          # Script to install dependencies and build the project in a Debian Linux environment
+├── run-alpine.sh          # Script to install dependencies and build the project in an Alpine environment
+├── run-debian.sh          # Script to install dependencies and build the project in a Debian environment
 └── test_pqxdh.c           # Unit tests for validating protocol correctness
 ```
 
