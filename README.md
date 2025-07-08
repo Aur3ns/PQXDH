@@ -105,13 +105,13 @@ Encryption/Decryption Test: PASS
 Using the Alpine Dockerfile as an example, first build the image:
 
 ```shell
-docker build -f ./alpine.dockerfile -t PQDXH-alpine .
+docker build -f ./alpine.dockerfile -t pqdxh-alpine .
 ```
 
 Then, run a container from that image:
 
 ```shell
-docker run PQXDH-alpine
+docker run pqdxh-alpine
 ```
 
 ***Expected Output***
