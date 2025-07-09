@@ -1,0 +1,5 @@
+**/*.md
+!**/LICENSE.md
+/run.sh
+docker*
+*.dockerfile
