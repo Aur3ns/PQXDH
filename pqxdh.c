@@ -7,7 +7,21 @@
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
+
+/* libxeddsa's public header marks calls as dllimport on Windows unless BUILD
+ * is defined. Its object files are embedded directly into pqxdh, so these are
+ * local definitions rather than imports. Keep the workaround scoped to this
+ * header instead of leaking libxeddsa's generic BUILD macro to other headers.
+ */
+#if defined(_WIN32) && !defined(BUILD)
+#define BUILD
+#define PQXDH_UNDEFINE_XEDDSA_BUILD
+#endif
 #include <xeddsa.h>
+#if defined(PQXDH_UNDEFINE_XEDDSA_BUILD)
+#undef PQXDH_UNDEFINE_XEDDSA_BUILD
+#undef BUILD
+#endif
 
 #define PQXDH_EC_ENCODING_TAG 0x05U
 #define PQXDH_KEM_ENCODING_TAG 0x0aU
