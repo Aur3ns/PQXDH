@@ -1,0 +1,15 @@
+*.o
+*.a
+*.so
+*.so.*
+test_pqxdh
+build/
+build-*/
+build-windows-*/
+vcpkg_installed/
+liboqs/build/
+liboqs/build-*/
+libxeddsa/build/
+libxeddsa/bin/
+.cache/
+compile_commands.json

@@ -7,12 +7,11 @@
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
+#include <xeddsa.h>
 
-#define PQXDH_SP_SIGNATURE_LABEL "PQXDH-SPK-v1"
-#define PQXDH_KEM_SIGNATURE_LABEL "PQXDH-KEM-v1"
-#define PQXDH_AAD_LABEL "PQXDH-AAD-v1"
-#define PQXDH_HKDF_INFO_LABEL \
-    "PQXDH-v1|X25519|SHA-256|ML-KEM-1024|AES-256-GCM"
+#define PQXDH_EC_ENCODING_TAG 0x05U
+#define PQXDH_KEM_ENCODING_TAG 0x0aU
+#define PQXDH_HKDF_INFO_LABEL "PQXDH_CURVE25519_SHA-256_ML-KEM-1024"
 
 #define PQXDH_SIGNATURE_DATA_MAX_BYTES 2048U
 #define PQXDH_ASSOCIATED_DATA_MAX_BYTES 4096U
@@ -23,6 +22,9 @@
 /* Internal utilities                                                        */
 /* ------------------------------------------------------------------------- */
 
+/* Securely wipe sensitive data from memory.
+ * sodium_memzero() is used so the compiler cannot optimize the erase away.
+ */
 static void secure_zero(void *buffer, size_t length)
 {
     if (buffer != NULL && length > 0U) {
@@ -30,6 +32,9 @@ static void secure_zero(void *buffer, size_t length)
     }
 }
 
+/* Append a raw byte sequence to a bounded output buffer.
+ * The offset is advanced only when the complete input fits.
+ */
 static int append_bytes(
     uint8_t *output,
     size_t output_capacity,
@@ -56,6 +61,7 @@ static int append_bytes(
     return PQXDH_SUCCESS;
 }
 
+/* Append one unsigned byte to the serialized output buffer. */
 static int append_u8(
     uint8_t *output,
     size_t output_capacity,
@@ -66,6 +72,7 @@ static int append_u8(
     return append_bytes(output, output_capacity, offset, &value, 1U);
 }
 
+/* Append a 32-bit unsigned integer in big-endian network byte order. */
 static int append_u32_be(
     uint8_t *output,
     size_t output_capacity,
@@ -83,6 +90,9 @@ static int append_u32_be(
     return append_bytes(output, output_capacity, offset, encoded, sizeof(encoded));
 }
 
+/* Read a fixed number of bytes from a bounded input buffer.
+ * The offset is advanced only when enough encoded data remains.
+ */
 static int read_bytes(
     const uint8_t *input,
     size_t input_length,
@@ -108,6 +118,7 @@ static int read_bytes(
     return PQXDH_SUCCESS;
 }
 
+/* Read one unsigned byte from the encoded message. */
 static int read_u8(
     const uint8_t *input,
     size_t input_length,
@@ -118,6 +129,7 @@ static int read_u8(
     return read_bytes(input, input_length, offset, value, 1U);
 }
 
+/* Read a 32-bit unsigned integer encoded in big-endian byte order. */
 static int read_u32_be(
     const uint8_t *input,
     size_t input_length,
@@ -145,6 +157,9 @@ static int read_u32_be(
     return PQXDH_SUCCESS;
 }
 
+/* Compute a SHA-256 digest with the OpenSSL EVP interface.
+ * The output buffer is wiped if hashing fails.
+ */
 static int sha256_digest(
     const uint8_t *input,
     size_t input_length,
@@ -190,6 +205,7 @@ cleanup:
     return status;
 }
 
+/* Return 1 only when every byte in the supplied buffer is zero. */
 static int bytes_are_zero(const uint8_t *input, size_t input_length)
 {
     uint8_t accumulator = 0U;
@@ -205,6 +221,9 @@ static int bytes_are_zero(const uint8_t *input, size_t input_length)
     return accumulator == 0U;
 }
 
+/* Check whether a message identifier is already present in the replay tracker.
+ * sodium_memcmp() is used for fixed-length comparisons.
+ */
 static int replay_contains(
     const ReplayTracker *tracker,
     const uint8_t message_id[PQXDH_MESSAGE_ID_BYTES]
@@ -234,6 +253,9 @@ static int replay_contains(
     return 0;
 }
 
+/* Generate a fresh X25519 key pair.
+ * The private scalar is generated with libsodium's cryptographic RNG.
+ */
 static int generate_x25519_keypair(
     uint8_t public_key[PQXDH_X25519_PUBLIC_BYTES],
     uint8_t private_key[PQXDH_X25519_PRIVATE_BYTES]
@@ -254,7 +276,49 @@ static int generate_x25519_keypair(
     return PQXDH_SUCCESS;
 }
 
-static int x25519(
+/* Generate an X25519 identity scalar in XEdDSA's canonical sign-bit form. */
+static int generate_identity_keypair(uint8_t public_key[32], uint8_t private_key[32])
+{
+    randombytes_buf(private_key, 32U);
+    priv_to_curve25519_pub(public_key, private_key);
+    return bytes_are_zero(public_key, 32U) ? PQXDH_ERROR_RANDOM : PQXDH_SUCCESS;
+}
+
+static int xeddsa_sign_key(uint8_t signature[64], const uint8_t private_key[32],
+                           const uint8_t *message, size_t message_length)
+{
+    uint8_t nonce[64];
+    uint8_t signing_scalar[32];
+
+    if (message_length > UINT32_MAX) {
+        return PQXDH_ERROR_INVALID_ARGUMENT;
+    }
+    priv_force_sign(signing_scalar, private_key, false);
+    randombytes_buf(nonce, sizeof(nonce));
+    ed25519_priv_sign(signature, signing_scalar, message,
+                      (uint32_t) message_length, nonce);
+    secure_zero(nonce, sizeof(nonce));
+    secure_zero(signing_scalar, sizeof(signing_scalar));
+    return PQXDH_SUCCESS;
+}
+
+static int xeddsa_verify_key(const uint8_t signature[64], const uint8_t public_key[32],
+                             const uint8_t *message, size_t message_length)
+{
+    uint8_t ed_public[32];
+    int result;
+
+    if (message_length > UINT32_MAX) {
+        return PQXDH_ERROR_SIGNATURE;
+    }
+    curve25519_pub_to_ed25519_pub(ed_public, public_key, false);
+    result = ed25519_verify(signature, ed_public, message, (uint32_t) message_length);
+    secure_zero(ed_public, sizeof(ed_public));
+    return result == 0 ? PQXDH_SUCCESS : PQXDH_ERROR_SIGNATURE;
+}
+
+/* Compute one X25519 Diffie-Hellman shared secret. */
+static int pqxdh_x25519(
     uint8_t output[PQXDH_X25519_PUBLIC_BYTES],
     const uint8_t private_key[PQXDH_X25519_PRIVATE_BYTES],
     const uint8_t public_key[PQXDH_X25519_PUBLIC_BYTES]
@@ -272,6 +336,7 @@ static int x25519(
     return PQXDH_SUCCESS;
 }
 
+/* Verify that the configured ML-KEM algorithm is enabled in liboqs. */
 static int create_kem(void)
 {
     if (OQS_KEM_alg_is_enabled(PQXDH_KEM_ALGORITHM) != 1) {
@@ -281,6 +346,9 @@ static int create_kem(void)
     return PQXDH_SUCCESS;
 }
 
+/* Encapsulate a post-quantum shared secret with Bob's ML-KEM public key.
+ * The resulting ciphertext is sent to Bob as part of the initial message.
+ */
 static int kem_encapsulate(
     const uint8_t public_key[PQXDH_KEM_PUBLIC_KEY_BYTES],
     uint8_t ciphertext[PQXDH_KEM_CIPHERTEXT_BYTES],
@@ -324,6 +392,7 @@ cleanup:
     return status;
 }
 
+/* Recover the post-quantum shared secret using Bob's ML-KEM private key. */
 static int kem_decapsulate(
     const uint8_t private_key[PQXDH_KEM_PRIVATE_KEY_BYTES],
     const uint8_t ciphertext[PQXDH_KEM_CIPHERTEXT_BYTES],
@@ -370,6 +439,7 @@ cleanup:
 /* Pre-key signatures                                                        */
 /* ------------------------------------------------------------------------- */
 
+/* Sig(IK_B, EncodeEC(SPK_B), Z_SPK), per PQXDH revision 3. */
 static int build_signed_prekey_signature_data(
     const PreKeyBundle *bundle,
     uint8_t *output,
@@ -384,46 +454,7 @@ static int build_signed_prekey_signature_data(
         return PQXDH_ERROR_INVALID_ARGUMENT;
     }
 
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        (const uint8_t *) PQXDH_SP_SIGNATURE_LABEL,
-        sizeof(PQXDH_SP_SIGNATURE_LABEL) - 1U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        bundle->identity_signing_public,
-        sizeof(bundle->identity_signing_public)
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        bundle->identity_dh_public,
-        sizeof(bundle->identity_dh_public)
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        bundle->signed_prekey_id,
-        sizeof(bundle->signed_prekey_id)
-    );
+    status = append_u8(output, output_capacity, &offset, PQXDH_EC_ENCODING_TAG);
     if (status != PQXDH_SUCCESS) {
         return status;
     }
@@ -443,6 +474,7 @@ static int build_signed_prekey_signature_data(
     return PQXDH_SUCCESS;
 }
 
+/* Sig(IK_B, EncodeKEM(PQPK_B), Z_PQPK), per PQXDH revision 3. */
 static int build_kem_signature_data(
     const PreKeyBundle *bundle,
     uint8_t *output,
@@ -457,45 +489,7 @@ static int build_kem_signature_data(
         return PQXDH_ERROR_INVALID_ARGUMENT;
     }
 
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        (const uint8_t *) PQXDH_KEM_SIGNATURE_LABEL,
-        sizeof(PQXDH_KEM_SIGNATURE_LABEL) - 1U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        bundle->identity_signing_public,
-        sizeof(bundle->identity_signing_public)
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        bundle->kem_id,
-        sizeof(bundle->kem_id)
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_u8(
-        output,
-        output_capacity,
-        &offset,
-        bundle->kem_is_one_time ? 1U : 0U
-    );
+    status = append_u8(output, output_capacity, &offset, PQXDH_KEM_ENCODING_TAG);
     if (status != PQXDH_SUCCESS) {
         return status;
     }
@@ -519,6 +513,7 @@ static int build_kem_signature_data(
 /* Transcript and KDF                                                        */
 /* ------------------------------------------------------------------------- */
 
+/* AD = EncodeEC(IK_A) || EncodeEC(IK_B). ML-KEM binds its public key. */
 static int build_associated_data(
     const PreKeyBundle *bob_bundle,
     const InitialMessage *message,
@@ -535,85 +530,25 @@ static int build_associated_data(
         return PQXDH_ERROR_INVALID_ARGUMENT;
     }
 
-    status = append_bytes(
-        output,
-        output_capacity,
-        &offset,
-        (const uint8_t *) PQXDH_AAD_LABEL,
-        sizeof(PQXDH_AAD_LABEL) - 1U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    status = append_u8(output, output_capacity, &offset, message->version);
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-#define APPEND_FIELD(field)                                                   \
-    do {                                                                      \
-        status = append_bytes(                                                \
-            output, output_capacity, &offset, (field), sizeof(field)          \
-        );                                                                    \
-        if (status != PQXDH_SUCCESS) {                                        \
-            return status;                                                    \
-        }                                                                     \
-    } while (0)
-
-    APPEND_FIELD(message->alice_identity_signing_public);
-    APPEND_FIELD(message->alice_identity_dh_public);
-    APPEND_FIELD(message->alice_ephemeral_public);
-    APPEND_FIELD(message->signed_prekey_id);
-
-    status = append_u8(
-        output,
-        output_capacity,
-        &offset,
-        message->uses_one_time_prekey ? 1U : 0U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    APPEND_FIELD(message->one_time_prekey_id);
-    APPEND_FIELD(message->kem_id);
-    APPEND_FIELD(message->kem_ciphertext);
-
-    APPEND_FIELD(bob_bundle->identity_signing_public);
-    APPEND_FIELD(bob_bundle->identity_dh_public);
-    APPEND_FIELD(bob_bundle->signed_prekey_public);
-
-    status = append_u8(
-        output,
-        output_capacity,
-        &offset,
-        bob_bundle->has_one_time_prekey ? 1U : 0U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    APPEND_FIELD(bob_bundle->one_time_prekey_public);
-
-    status = append_u8(
-        output,
-        output_capacity,
-        &offset,
-        bob_bundle->kem_is_one_time ? 1U : 0U
-    );
-    if (status != PQXDH_SUCCESS) {
-        return status;
-    }
-
-    APPEND_FIELD(bob_bundle->kem_public);
-
-#undef APPEND_FIELD
+    status = append_u8(output, output_capacity, &offset, PQXDH_EC_ENCODING_TAG);
+    if (status == PQXDH_SUCCESS)
+        status = append_bytes(output, output_capacity, &offset,
+                              message->alice_identity_public, 32U);
+    if (status == PQXDH_SUCCESS)
+        status = append_u8(output, output_capacity, &offset, PQXDH_EC_ENCODING_TAG);
+    if (status == PQXDH_SUCCESS)
+        status = append_bytes(output, output_capacity, &offset,
+                              bob_bundle->identity_public, 32U);
+    if (status != PQXDH_SUCCESS) return status;
 
     *output_length = offset;
     return PQXDH_SUCCESS;
 }
 
+/* Derive the final 256-bit session key with HKDF-SHA-256.
+ * Classical X25519 shared secrets and the ML-KEM shared secret are combined,
+ * then bound to a hash of the authenticated transcript.
+ */
 static int derive_session_key(
     const uint8_t dh1[PQXDH_X25519_PUBLIC_BYTES],
     const uint8_t dh2[PQXDH_X25519_PUBLIC_BYTES],
@@ -621,8 +556,6 @@ static int derive_session_key(
     const uint8_t *dh4,
     bool uses_one_time_prekey,
     const uint8_t kem_shared_secret[PQXDH_KEM_SHARED_SECRET_BYTES],
-    const uint8_t *associated_data,
-    size_t associated_data_length,
     uint8_t session_key[PQXDH_SESSION_KEY_BYTES]
 )
 {
@@ -631,20 +564,15 @@ static int derive_session_key(
         (4U * PQXDH_X25519_PUBLIC_BYTES) +
         PQXDH_KEM_SHARED_SECRET_BYTES
     ];
-    uint8_t transcript_hash[PQXDH_SHA256_BYTES];
-    uint8_t info[
-        (sizeof(PQXDH_HKDF_INFO_LABEL) - 1U) + PQXDH_SHA256_BYTES
-    ];
+    const uint8_t info[] = PQXDH_HKDF_INFO_LABEL;
     const uint8_t salt[PQXDH_SHA256_BYTES] = {0};
     EVP_PKEY_CTX *ctx = NULL;
     size_t ikm_length = 0U;
-    size_t info_length = 0U;
     size_t output_length = PQXDH_SESSION_KEY_BYTES;
     int status = PQXDH_ERROR_KDF;
 
     if (dh1 == NULL || dh2 == NULL || dh3 == NULL ||
-        kem_shared_secret == NULL || associated_data == NULL ||
-        session_key == NULL ||
+        kem_shared_secret == NULL || session_key == NULL ||
         (uses_one_time_prekey && dh4 == NULL)) {
         return PQXDH_ERROR_INVALID_ARGUMENT;
     }
@@ -673,25 +601,6 @@ static int derive_session_key(
     );
     ikm_length += PQXDH_KEM_SHARED_SECRET_BYTES;
 
-    status = sha256_digest(
-        associated_data,
-        associated_data_length,
-        transcript_hash
-    );
-    if (status != PQXDH_SUCCESS) {
-        goto cleanup;
-    }
-
-    memcpy(
-        info,
-        PQXDH_HKDF_INFO_LABEL,
-        sizeof(PQXDH_HKDF_INFO_LABEL) - 1U
-    );
-    info_length = sizeof(PQXDH_HKDF_INFO_LABEL) - 1U;
-
-    memcpy(info + info_length, transcript_hash, sizeof(transcript_hash));
-    info_length += sizeof(transcript_hash);
-
     ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, NULL);
     if (ctx == NULL) {
         status = PQXDH_ERROR_MEMORY;
@@ -717,7 +626,7 @@ static int derive_session_key(
         EVP_PKEY_CTX_add1_hkdf_info(
             ctx,
             info,
-            (int) info_length
+            (int) (sizeof(info) - 1U)
         ) <= 0 ||
         EVP_PKEY_derive(ctx, session_key, &output_length) <= 0 ||
         output_length != PQXDH_SESSION_KEY_BYTES) {
@@ -730,8 +639,6 @@ static int derive_session_key(
 cleanup:
     EVP_PKEY_CTX_free(ctx);
     secure_zero(ikm, sizeof(ikm));
-    secure_zero(info, sizeof(info));
-    secure_zero(transcript_hash, sizeof(transcript_hash));
 
     if (status != PQXDH_SUCCESS) {
         secure_zero(session_key, PQXDH_SESSION_KEY_BYTES);
@@ -744,6 +651,9 @@ cleanup:
 /* Internal message encoding                                                 */
 /* ------------------------------------------------------------------------- */
 
+/* Serialize every InitialMessage field except message_id.
+ * This deterministic representation is hashed to compute the message identifier.
+ */
 static int serialize_initial_message_prefix(
     const InitialMessage *message,
     uint8_t *encoded,
@@ -779,8 +689,7 @@ static int serialize_initial_message_prefix(
         }                                                                     \
     } while (0)
 
-    SERIALIZE_FIELD(message->alice_identity_signing_public);
-    SERIALIZE_FIELD(message->alice_identity_dh_public);
+    SERIALIZE_FIELD(message->alice_identity_public);
     SERIALIZE_FIELD(message->alice_ephemeral_public);
     SERIALIZE_FIELD(message->signed_prekey_id);
 
@@ -826,6 +735,9 @@ static int serialize_initial_message_prefix(
     return PQXDH_SUCCESS;
 }
 
+/* Compute the SHA-256 identifier of the serialized initial message.
+ * The identifier is later used for integrity validation and replay detection.
+ */
 static int compute_initial_message_id(
     const InitialMessage *message,
     uint8_t output[PQXDH_MESSAGE_ID_BYTES]
@@ -851,10 +763,12 @@ static int compute_initial_message_id(
     return status;
 }
 
+/* Validate the structural and cryptographic consistency of an initial message.
+ * This checks protocol version, lengths, optional fields and message identifier.
+ */
 static int validate_initial_message(const InitialMessage *message)
 {
     uint8_t expected_id[PQXDH_MESSAGE_ID_BYTES];
-    uint8_t converted_identity[PQXDH_X25519_PUBLIC_BYTES];
     int status;
 
     if (message == NULL) {
@@ -875,23 +789,12 @@ static int validate_initial_message(const InitialMessage *message)
         return PQXDH_ERROR_ENCODING;
     }
 
-    if (crypto_sign_ed25519_pk_to_curve25519(
-            converted_identity,
-            message->alice_identity_signing_public
-        ) != 0) {
+    if (bytes_are_zero(message->alice_identity_public,
+                       sizeof(message->alice_identity_public)) ||
+        bytes_are_zero(message->alice_ephemeral_public,
+                       sizeof(message->alice_ephemeral_public))) {
         return PQXDH_ERROR_ENCODING;
     }
-
-    if (sodium_memcmp(
-            converted_identity,
-            message->alice_identity_dh_public,
-            sizeof(converted_identity)
-        ) != 0) {
-        secure_zero(converted_identity, sizeof(converted_identity));
-        return PQXDH_ERROR_ENCODING;
-    }
-
-    secure_zero(converted_identity, sizeof(converted_identity));
 
     status = compute_initial_message_id(message, expected_id);
     if (status != PQXDH_SUCCESS) {
@@ -915,15 +818,17 @@ static int validate_initial_message(const InitialMessage *message)
 /* Public API                                                                */
 /* ------------------------------------------------------------------------- */
 
+/* Initialize the cryptographic dependencies required by this implementation. */
 int pqxdh_init(void)
 {
-    if (sodium_init() < 0) {
+    if (xeddsa_init() < 0) {
         return PQXDH_ERROR_INITIALIZATION;
     }
 
     return create_kem();
 }
 
+/* Compute a stable SHA-256 identifier for a public pre-key. */
 int pqxdh_compute_key_id(
     const uint8_t *key,
     size_t key_len,
@@ -937,6 +842,7 @@ int pqxdh_compute_key_id(
     return sha256_digest(key, key_len, key_id);
 }
 
+/* Generate Alice's long-term Curve25519 identity key. */
 int pqxdh_generate_alice_keys(AliceKeyBundle *alice)
 {
     int status;
@@ -952,29 +858,21 @@ int pqxdh_generate_alice_keys(AliceKeyBundle *alice)
         return status;
     }
 
-    if (crypto_sign_keypair(
-            alice->signing_public,
-            alice->signing_private
-        ) != 0) {
-        return PQXDH_ERROR_RANDOM;
-    }
-
-    if (crypto_sign_ed25519_pk_to_curve25519(
-            alice->dh_public,
-            alice->signing_public
-        ) != 0 ||
-        crypto_sign_ed25519_sk_to_curve25519(
-            alice->dh_private,
-            alice->signing_private
-        ) != 0) {
+    status = generate_identity_keypair(alice->identity_public,
+                                       alice->identity_private);
+    if (status != PQXDH_SUCCESS) {
         pqxdh_clear_alice_keys(alice);
-        return PQXDH_ERROR_INITIALIZATION;
+        return status;
     }
 
     alice->initialized = true;
     return PQXDH_SUCCESS;
 }
 
+/* Generate Bob's complete public/private pre-key state.
+ * This creates the identity key, signed X25519 pre-key, one-time X25519 pre-key,
+ * ML-KEM-1024 pre-key, identifiers, and signatures published to Alice.
+ */
 int pqxdh_generate_pre_key_bundle(
     PreKeyBundle *public_bundle,
     PrivateKeyBundle *private_bundle
@@ -998,23 +896,9 @@ int pqxdh_generate_pre_key_bundle(
         goto cleanup;
     }
 
-    if (crypto_sign_keypair(
-            public_bundle->identity_signing_public,
-            private_bundle->identity_signing_private
-        ) != 0) {
-        status = PQXDH_ERROR_RANDOM;
-        goto cleanup;
-    }
-
-    if (crypto_sign_ed25519_pk_to_curve25519(
-            public_bundle->identity_dh_public,
-            public_bundle->identity_signing_public
-        ) != 0 ||
-        crypto_sign_ed25519_sk_to_curve25519(
-            private_bundle->identity_dh_private,
-            private_bundle->identity_signing_private
-        ) != 0) {
-        status = PQXDH_ERROR_INITIALIZATION;
+    status = generate_identity_keypair(public_bundle->identity_public,
+                                       private_bundle->identity_private);
+    if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
@@ -1100,14 +984,10 @@ int pqxdh_generate_pre_key_bundle(
         goto cleanup;
     }
 
-    if (crypto_sign_detached(
-            public_bundle->signed_prekey_signature,
-            NULL,
-            signature_data,
-            signature_data_length,
-            private_bundle->identity_signing_private
-        ) != 0) {
-        status = PQXDH_ERROR_SIGNATURE;
+    status = xeddsa_sign_key(public_bundle->signed_prekey_signature,
+                             private_bundle->identity_private,
+                             signature_data, signature_data_length);
+    if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
@@ -1124,14 +1004,10 @@ int pqxdh_generate_pre_key_bundle(
         goto cleanup;
     }
 
-    if (crypto_sign_detached(
-            public_bundle->kem_signature,
-            NULL,
-            signature_data,
-            signature_data_length,
-            private_bundle->identity_signing_private
-        ) != 0) {
-        status = PQXDH_ERROR_SIGNATURE;
+    status = xeddsa_sign_key(public_bundle->kem_signature,
+                             private_bundle->identity_private,
+                             signature_data, signature_data_length);
+    if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
@@ -1151,9 +1027,12 @@ cleanup:
     return status;
 }
 
+/* Verify the integrity and authenticity of Bob's public pre-key bundle.
+ * Public-key identifiers, identity conversion, and Ed25519 signatures are checked
+ * before Alice is allowed to use the bundle.
+ */
 int pqxdh_verify_pre_key_bundle(const PreKeyBundle *bundle)
 {
-    uint8_t expected_identity_dh[PQXDH_X25519_PUBLIC_BYTES];
     uint8_t expected_id[PQXDH_KEY_ID_BYTES];
     uint8_t signature_data[PQXDH_SIGNATURE_DATA_MAX_BYTES];
     size_t signature_data_length = 0U;
@@ -1163,22 +1042,8 @@ int pqxdh_verify_pre_key_bundle(const PreKeyBundle *bundle)
         return PQXDH_ERROR_INVALID_ARGUMENT;
     }
 
-    memset(expected_identity_dh, 0, sizeof(expected_identity_dh));
     memset(expected_id, 0, sizeof(expected_id));
     memset(signature_data, 0, sizeof(signature_data));
-
-    if (crypto_sign_ed25519_pk_to_curve25519(
-            expected_identity_dh,
-            bundle->identity_signing_public
-        ) != 0 ||
-        sodium_memcmp(
-            expected_identity_dh,
-            bundle->identity_dh_public,
-            sizeof(expected_identity_dh)
-        ) != 0) {
-        status = PQXDH_ERROR_SIGNATURE;
-        goto cleanup;
-    }
 
     status = pqxdh_compute_key_id(
         bundle->signed_prekey_public,
@@ -1243,13 +1108,10 @@ int pqxdh_verify_pre_key_bundle(const PreKeyBundle *bundle)
         goto cleanup;
     }
 
-    if (crypto_sign_verify_detached(
-            bundle->signed_prekey_signature,
-            signature_data,
-            signature_data_length,
-            bundle->identity_signing_public
-        ) != 0) {
-        status = PQXDH_ERROR_SIGNATURE;
+    status = xeddsa_verify_key(bundle->signed_prekey_signature,
+                               bundle->identity_public,
+                               signature_data, signature_data_length);
+    if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
@@ -1266,25 +1128,25 @@ int pqxdh_verify_pre_key_bundle(const PreKeyBundle *bundle)
         goto cleanup;
     }
 
-    if (crypto_sign_verify_detached(
-            bundle->kem_signature,
-            signature_data,
-            signature_data_length,
-            bundle->identity_signing_public
-        ) != 0) {
-        status = PQXDH_ERROR_SIGNATURE;
+    status = xeddsa_verify_key(bundle->kem_signature,
+                               bundle->identity_public,
+                               signature_data, signature_data_length);
+    if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
     status = PQXDH_SUCCESS;
 
 cleanup:
-    secure_zero(expected_identity_dh, sizeof(expected_identity_dh));
     secure_zero(expected_id, sizeof(expected_id));
     secure_zero(signature_data, sizeof(signature_data));
     return status;
 }
 
+/* Encrypt and authenticate a message with AES-256-GCM.
+ * The function generates a fresh nonce and appends the authentication tag
+ * directly after the encrypted payload.
+ */
 int encrypt_message(
     const uint8_t key[PQXDH_SESSION_KEY_BYTES],
     const uint8_t *plaintext,
@@ -1401,6 +1263,9 @@ cleanup:
     return status;
 }
 
+/* Authenticate and decrypt an AES-256-GCM ciphertext.
+ * Authentication failure causes the plaintext buffer to be wiped.
+ */
 int decrypt_message(
     const uint8_t key[PQXDH_SESSION_KEY_BYTES],
     const uint8_t *ciphertext,
@@ -1518,6 +1383,11 @@ cleanup:
     return status;
 }
 
+/* Execute Alice's side of the initial PQXDH exchange.
+ * Alice verifies Bob's bundle, generates an ephemeral X25519 key, performs the
+ * classical DH computations, encapsulates with ML-KEM, derives a session key,
+ * encrypts the first payload, and computes the final message identifier.
+ */
 int pqxdh_alice_create_initial_message(
     const AliceKeyBundle *alice,
     const PreKeyBundle *bob_bundle,
@@ -1557,6 +1427,7 @@ int pqxdh_alice_create_initial_message(
     memset(associated_data, 0, sizeof(associated_data));
     secure_zero(session_key, PQXDH_SESSION_KEY_BYTES);
 
+    /* Authenticate Bob's published pre-key bundle before using any key material. */
     status = pqxdh_verify_pre_key_bundle(bob_bundle);
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
@@ -1564,14 +1435,9 @@ int pqxdh_alice_create_initial_message(
 
     initial_message->version = PQXDH_PROTOCOL_VERSION;
     memcpy(
-        initial_message->alice_identity_signing_public,
-        alice->signing_public,
-        sizeof(initial_message->alice_identity_signing_public)
-    );
-    memcpy(
-        initial_message->alice_identity_dh_public,
-        alice->dh_public,
-        sizeof(initial_message->alice_identity_dh_public)
+        initial_message->alice_identity_public,
+        alice->identity_public,
+        sizeof(initial_message->alice_identity_public)
     );
     memcpy(
         initial_message->signed_prekey_id,
@@ -1596,6 +1462,7 @@ int pqxdh_alice_create_initial_message(
         sizeof(initial_message->kem_id)
     );
 
+    /* Generate Alice's ephemeral X25519 key pair for this handshake only. */
     status = generate_x25519_keypair(
         initial_message->alice_ephemeral_public,
         ephemeral_private
@@ -1604,25 +1471,28 @@ int pqxdh_alice_create_initial_message(
         goto cleanup;
     }
 
-    status = x25519(
+    /* DH1: Alice identity key with Bob's signed pre-key. */
+    status = pqxdh_x25519(
         dh1,
-        alice->dh_private,
+        alice->identity_private,
         bob_bundle->signed_prekey_public
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
-    status = x25519(
+    /* DH2: Alice ephemeral key with Bob's identity key. */
+    status = pqxdh_x25519(
         dh2,
         ephemeral_private,
-        bob_bundle->identity_dh_public
+        bob_bundle->identity_public
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
-    status = x25519(
+    /* DH3: Alice ephemeral key with Bob's signed pre-key. */
+    status = pqxdh_x25519(
         dh3,
         ephemeral_private,
         bob_bundle->signed_prekey_public
@@ -1631,8 +1501,9 @@ int pqxdh_alice_create_initial_message(
         goto cleanup;
     }
 
+    /* DH4 is included only when Bob supplied an unused one-time pre-key. */
     if (initial_message->uses_one_time_prekey) {
-        status = x25519(
+        status = pqxdh_x25519(
             dh4,
             ephemeral_private,
             bob_bundle->one_time_prekey_public
@@ -1642,6 +1513,7 @@ int pqxdh_alice_create_initial_message(
         }
     }
 
+    /* Add the post-quantum ML-KEM contribution to the hybrid handshake. */
     status = kem_encapsulate(
         bob_bundle->kem_public,
         initial_message->kem_ciphertext,
@@ -1662,6 +1534,7 @@ int pqxdh_alice_create_initial_message(
         goto cleanup;
     }
 
+    /* Combine all classical and post-quantum secrets into one session key. */
     status = derive_session_key(
         dh1,
         dh2,
@@ -1669,14 +1542,13 @@ int pqxdh_alice_create_initial_message(
         initial_message->uses_one_time_prekey ? dh4 : NULL,
         initial_message->uses_one_time_prekey,
         kem_shared_secret,
-        associated_data,
-        associated_data_length,
         session_key
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
+    /* Encrypt the initial application payload with the newly derived key. */
     status = encrypt_message(
         session_key,
         plaintext,
@@ -1692,6 +1564,7 @@ int pqxdh_alice_create_initial_message(
         goto cleanup;
     }
 
+    /* Finalize the message with a deterministic identifier used for replay checks. */
     status = compute_initial_message_id(
         initial_message,
         initial_message->message_id
@@ -1714,6 +1587,11 @@ cleanup:
     return status;
 }
 
+/* Execute Bob's side of the initial PQXDH exchange.
+ * Bob validates the message, rejects replays or reused one-time keys, reproduces
+ * the DH and ML-KEM secrets, derives the same session key, authenticates and
+ * decrypts the payload, then consumes the one-time private keys.
+ */
 int pqxdh_bob_process_initial_message(
     const PreKeyBundle *bob_public_bundle,
     PrivateKeyBundle *bob_private_bundle,
@@ -1750,16 +1628,19 @@ int pqxdh_bob_process_initial_message(
     memset(kem_shared_secret, 0, sizeof(kem_shared_secret));
     memset(associated_data, 0, sizeof(associated_data));
 
+    /* Revalidate the public bundle so the local public/private state remains trusted. */
     status = pqxdh_verify_pre_key_bundle(bob_public_bundle);
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
+    /* Reject malformed or internally inconsistent messages before cryptographic use. */
     status = validate_initial_message(initial_message);
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
+    /* Reject an initial message that has already been processed. */
     if (replay_contains(replay_tracker, initial_message->message_id)) {
         status = PQXDH_ERROR_REPLAY;
         goto cleanup;
@@ -1803,25 +1684,25 @@ int pqxdh_bob_process_initial_message(
         goto cleanup;
     }
 
-    status = x25519(
+    status = pqxdh_x25519(
         dh1,
         bob_private_bundle->signed_prekey_private,
-        initial_message->alice_identity_dh_public
+        initial_message->alice_identity_public
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
-    status = x25519(
+    status = pqxdh_x25519(
         dh2,
-        bob_private_bundle->identity_dh_private,
+        bob_private_bundle->identity_private,
         initial_message->alice_ephemeral_public
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
-    status = x25519(
+    status = pqxdh_x25519(
         dh3,
         bob_private_bundle->signed_prekey_private,
         initial_message->alice_ephemeral_public
@@ -1831,7 +1712,7 @@ int pqxdh_bob_process_initial_message(
     }
 
     if (initial_message->uses_one_time_prekey) {
-        status = x25519(
+        status = pqxdh_x25519(
             dh4,
             bob_private_bundle->one_time_prekey_private,
             initial_message->alice_ephemeral_public
@@ -1841,6 +1722,7 @@ int pqxdh_bob_process_initial_message(
         }
     }
 
+    /* Recover the same post-quantum shared secret created by Alice. */
     status = kem_decapsulate(
         bob_private_bundle->kem_private,
         initial_message->kem_ciphertext,
@@ -1868,14 +1750,13 @@ int pqxdh_bob_process_initial_message(
         initial_message->uses_one_time_prekey ? dh4 : NULL,
         initial_message->uses_one_time_prekey,
         kem_shared_secret,
-        associated_data,
-        associated_data_length,
         session_key
     );
     if (status != PQXDH_SUCCESS) {
         goto cleanup;
     }
 
+    /* Authenticate the transcript-bound ciphertext before accepting the payload. */
     status = decrypt_message(
         session_key,
         initial_message->ciphertext,
@@ -1936,6 +1817,9 @@ cleanup:
     return status;
 }
 
+/* Encode an InitialMessage into a deterministic platform-independent format.
+ * Fixed-width integer fields use network byte order.
+ */
 int pqxdh_encode_initial_message(
     const InitialMessage *message,
     uint8_t *encoded,
@@ -1980,6 +1864,9 @@ int pqxdh_encode_initial_message(
     return PQXDH_SUCCESS;
 }
 
+/* Decode a serialized InitialMessage and validate its complete structure.
+ * Extra bytes, malformed lengths, and inconsistent identifiers are rejected.
+ */
 int pqxdh_decode_initial_message(
     const uint8_t *encoded,
     size_t encoded_len,
@@ -2012,8 +1899,7 @@ int pqxdh_decode_initial_message(
         }                                                                     \
     } while (0)
 
-    DECODE_FIELD(message->alice_identity_signing_public);
-    DECODE_FIELD(message->alice_identity_dh_public);
+    DECODE_FIELD(message->alice_identity_public);
     DECODE_FIELD(message->alice_ephemeral_public);
     DECODE_FIELD(message->signed_prekey_id);
 
@@ -2076,6 +1962,7 @@ fail:
     return status;
 }
 
+/* Reset a replay tracker to an empty state. */
 void pqxdh_replay_tracker_init(ReplayTracker *tracker)
 {
     if (tracker != NULL) {
@@ -2083,6 +1970,9 @@ void pqxdh_replay_tracker_init(ReplayTracker *tracker)
     }
 }
 
+/* Reject a previously seen message identifier or record a new one.
+ * When the fixed tracker is full, the oldest entry is discarded.
+ */
 int pqxdh_replay_check_and_mark(
     ReplayTracker *tracker,
     const uint8_t message_id[PQXDH_MESSAGE_ID_BYTES]
@@ -2119,6 +2009,7 @@ int pqxdh_replay_check_and_mark(
     return PQXDH_SUCCESS;
 }
 
+/* Securely erase Alice's private and public key state. */
 void pqxdh_clear_alice_keys(AliceKeyBundle *alice)
 {
     if (alice != NULL) {
@@ -2126,6 +2017,7 @@ void pqxdh_clear_alice_keys(AliceKeyBundle *alice)
     }
 }
 
+/* Securely erase Bob's complete private pre-key state. */
 void pqxdh_clear_private_key_bundle(PrivateKeyBundle *private_bundle)
 {
     if (private_bundle != NULL) {
@@ -2133,6 +2025,7 @@ void pqxdh_clear_private_key_bundle(PrivateKeyBundle *private_bundle)
     }
 }
 
+/* Securely erase an InitialMessage structure from memory. */
 void pqxdh_clear_initial_message(InitialMessage *message)
 {
     if (message != NULL) {
@@ -2140,6 +2033,7 @@ void pqxdh_clear_initial_message(InitialMessage *message)
     }
 }
 
+/* Securely erase a derived session key. */
 void pqxdh_clear_session_key(
     uint8_t session_key[PQXDH_SESSION_KEY_BYTES]
 )
@@ -2149,6 +2043,7 @@ void pqxdh_clear_session_key(
     }
 }
 
+/* Convert a PQXDH status code into a short human-readable English message. */
 const char *pqxdh_status_string(int status)
 {
     switch (status) {
@@ -2187,4 +2082,9 @@ const char *pqxdh_status_string(int status)
         default:
             return "unknown error";
     }
+}
+
+const char *pqxdh_version_string(void)
+{
+    return "0.3.0";
 }

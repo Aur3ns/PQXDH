@@ -17,7 +17,10 @@ extern "C" {
 #error "PQXDH requires liboqs to be built with ML-KEM-1024 enabled"
 #endif
 
-#define PQXDH_PROTOCOL_VERSION 1U
+#define PQXDH_PROTOCOL_VERSION 2U
+#define PQXDH_VERSION_MAJOR 0U
+#define PQXDH_VERSION_MINOR 3U
+#define PQXDH_VERSION_PATCH 0U
 #define PQXDH_SESSION_KEY_BYTES 32U
 #define PQXDH_KEY_ID_BYTES 32U
 #define PQXDH_MESSAGE_ID_BYTES 32U
@@ -33,9 +36,9 @@ extern "C" {
 #define PQXDH_KEM_PRIVATE_KEY_BYTES OQS_KEM_ml_kem_1024_length_secret_key
 #define PQXDH_KEM_CIPHERTEXT_BYTES OQS_KEM_ml_kem_1024_length_ciphertext
 #define PQXDH_KEM_SHARED_SECRET_BYTES OQS_KEM_ml_kem_1024_length_shared_secret
-#define PQXDH_IDENTITY_PUBLIC_BYTES crypto_sign_PUBLICKEYBYTES
-#define PQXDH_IDENTITY_PRIVATE_BYTES crypto_sign_SECRETKEYBYTES
-#define PQXDH_SIGNATURE_BYTES crypto_sign_BYTES
+#define PQXDH_IDENTITY_PUBLIC_BYTES 32U
+#define PQXDH_IDENTITY_PRIVATE_BYTES 32U
+#define PQXDH_SIGNATURE_BYTES 64U
 #define PQXDH_X25519_PUBLIC_BYTES crypto_scalarmult_curve25519_BYTES
 #define PQXDH_X25519_PRIVATE_BYTES crypto_scalarmult_curve25519_SCALARBYTES
 
@@ -59,16 +62,13 @@ typedef enum {
 } PqxdhStatus;
 
 typedef struct {
-    uint8_t signing_public[PQXDH_IDENTITY_PUBLIC_BYTES];
-    uint8_t signing_private[PQXDH_IDENTITY_PRIVATE_BYTES];
-    uint8_t dh_public[PQXDH_X25519_PUBLIC_BYTES];
-    uint8_t dh_private[PQXDH_X25519_PRIVATE_BYTES];
+    uint8_t identity_public[PQXDH_IDENTITY_PUBLIC_BYTES];
+    uint8_t identity_private[PQXDH_IDENTITY_PRIVATE_BYTES];
     bool initialized;
 } AliceKeyBundle;
 
 typedef struct {
-    uint8_t identity_signing_public[PQXDH_IDENTITY_PUBLIC_BYTES];
-    uint8_t identity_dh_public[PQXDH_X25519_PUBLIC_BYTES];
+    uint8_t identity_public[PQXDH_IDENTITY_PUBLIC_BYTES];
     uint8_t signed_prekey_public[PQXDH_X25519_PUBLIC_BYTES];
     uint8_t signed_prekey_signature[PQXDH_SIGNATURE_BYTES];
     uint8_t signed_prekey_id[PQXDH_KEY_ID_BYTES];
@@ -83,8 +83,7 @@ typedef struct {
 } PreKeyBundle;
 
 typedef struct {
-    uint8_t identity_signing_private[PQXDH_IDENTITY_PRIVATE_BYTES];
-    uint8_t identity_dh_private[PQXDH_X25519_PRIVATE_BYTES];
+    uint8_t identity_private[PQXDH_IDENTITY_PRIVATE_BYTES];
     uint8_t signed_prekey_private[PQXDH_X25519_PRIVATE_BYTES];
     bool has_one_time_prekey;
     bool one_time_prekey_used;
@@ -97,8 +96,7 @@ typedef struct {
 
 typedef struct {
     uint8_t version;
-    uint8_t alice_identity_signing_public[PQXDH_IDENTITY_PUBLIC_BYTES];
-    uint8_t alice_identity_dh_public[PQXDH_X25519_PUBLIC_BYTES];
+    uint8_t alice_identity_public[PQXDH_IDENTITY_PUBLIC_BYTES];
     uint8_t alice_ephemeral_public[PQXDH_X25519_PUBLIC_BYTES];
     uint8_t signed_prekey_id[PQXDH_KEY_ID_BYTES];
     bool uses_one_time_prekey;
@@ -134,6 +132,7 @@ void pqxdh_clear_private_key_bundle(PrivateKeyBundle *private_bundle);
 void pqxdh_clear_initial_message(InitialMessage *message);
 void pqxdh_clear_session_key(uint8_t session_key[PQXDH_SESSION_KEY_BYTES]);
 const char *pqxdh_status_string(int status);
+const char *pqxdh_version_string(void);
 
 #ifdef __cplusplus
 }

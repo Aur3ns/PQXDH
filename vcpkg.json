@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "pqxdh",
+  "version-semver": "0.3.0",
+  "description": "PQXDH revision 3 key agreement library",
+  "license": "MIT",
+  "dependencies": [
+    "liboqs",
+    "libsodium",
+    "openssl"
+  ]
+}

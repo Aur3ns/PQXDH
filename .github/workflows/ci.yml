@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        compiler: [gcc, clang]
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.compiler }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libsodium-dev libssl-dev pkg-config
+      - name: Build liboqs
+        run: >-
+          cmake -S liboqs -B liboqs/build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/oqs"
+          -DOQS_USE_OPENSSL=ON
+          -DOQS_BUILD_ONLY_LIB=ON
+          -DOQS_MINIMAL_BUILD=KEM_ml_kem_1024
+      - run: cmake --build liboqs/build --parallel
+      - run: cmake --install liboqs/build
+      - name: Configure PQXDH
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/oqs"
+          -DPQXDH_ENABLE_SANITIZERS=ON
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure
+
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Configure, build, and test
+        shell: pwsh
+        run: ./run-windows.ps1 -Configuration Release -Triplet x64-windows

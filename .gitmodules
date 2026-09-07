@@ -1,3 +1,6 @@
 [submodule "liboqs"]
 	path = liboqs
 	url = https://github.com/open-quantum-safe/liboqs.git
+[submodule "libxeddsa"]
+	path = libxeddsa
+	url = https://github.com/Syndace/libxeddsa.git

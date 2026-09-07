@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(OpenSSL 3.0 COMPONENTS Crypto)
+find_dependency(liboqs CONFIG)
+if("@PQXDH_SODIUM_PROVIDER@" STREQUAL "vcpkg")
+    find_dependency(unofficial-sodium CONFIG)
+else()
+    find_dependency(PkgConfig)
+    pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/pqxdh-targets.cmake")

@@ -96,15 +96,15 @@ static int test_initialization_and_unique_keys(void)
     TEST_ASSERT(setup_keys(&alice2, &bob2_public, &bob2_private));
 
     TEST_ASSERT(sodium_memcmp(
-        alice1.signing_public,
-        alice2.signing_public,
-        sizeof(alice1.signing_public)
+        alice1.identity_public,
+        alice2.identity_public,
+        sizeof(alice1.identity_public)
     ) != 0);
 
     TEST_ASSERT(sodium_memcmp(
-        bob1_public.identity_signing_public,
-        bob2_public.identity_signing_public,
-        sizeof(bob1_public.identity_signing_public)
+        bob1_public.identity_public,
+        bob2_public.identity_public,
+        sizeof(bob1_public.identity_public)
     ) != 0);
 
     TEST_ASSERT(sodium_memcmp(
@@ -599,6 +599,76 @@ static int test_second_message_rejected_after_one_time_keys(void)
     return 1;
 }
 
+/* Exercise the specification's fallback path when no one-time curve prekey is
+ * available. The signed ML-KEM key still contributes post-quantum secrecy. */
+static int test_exchange_without_curve_one_time_prekey(void)
+{
+    static const uint8_t plaintext[] = "No curve one-time prekey";
+    AliceKeyBundle alice;
+    PreKeyBundle bob_public;
+    PrivateKeyBundle bob_private;
+    InitialMessage message;
+    ReplayTracker tracker;
+    uint8_t alice_key[PQXDH_SESSION_KEY_BYTES];
+    uint8_t bob_key[PQXDH_SESSION_KEY_BYTES];
+    uint8_t decrypted[PQXDH_MAX_INITIAL_PLAINTEXT_BYTES];
+    size_t decrypted_length = 0U;
+
+    TEST_ASSERT(setup_keys(&alice, &bob_public, &bob_private));
+    bob_public.has_one_time_prekey = false;
+    sodium_memzero(
+        bob_public.one_time_prekey_public,
+        sizeof(bob_public.one_time_prekey_public)
+    );
+    sodium_memzero(
+        bob_public.one_time_prekey_id,
+        sizeof(bob_public.one_time_prekey_id)
+    );
+    bob_private.has_one_time_prekey = false;
+    sodium_memzero(
+        bob_private.one_time_prekey_private,
+        sizeof(bob_private.one_time_prekey_private)
+    );
+    pqxdh_replay_tracker_init(&tracker);
+
+    TEST_ASSERT_STATUS(
+        pqxdh_alice_create_initial_message(
+            &alice,
+            &bob_public,
+            plaintext,
+            sizeof(plaintext) - 1U,
+            &message,
+            alice_key
+        ),
+        PQXDH_SUCCESS
+    );
+    TEST_ASSERT(!message.uses_one_time_prekey);
+
+    TEST_ASSERT_STATUS(
+        pqxdh_bob_process_initial_message(
+            &bob_public,
+            &bob_private,
+            &message,
+            decrypted,
+            sizeof(decrypted),
+            &decrypted_length,
+            bob_key,
+            &tracker
+        ),
+        PQXDH_SUCCESS
+    );
+    TEST_ASSERT(decrypted_length == sizeof(plaintext) - 1U);
+    TEST_ASSERT(sodium_memcmp(alice_key, bob_key, sizeof(alice_key)) == 0);
+
+    pqxdh_clear_session_key(alice_key);
+    pqxdh_clear_session_key(bob_key);
+    pqxdh_clear_initial_message(&message);
+    pqxdh_clear_alice_keys(&alice);
+    pqxdh_clear_private_key_bundle(&bob_private);
+    sodium_memzero(decrypted, sizeof(decrypted));
+    return 1;
+}
+
 /* Run every test in sequence, print a compact result for each test,
  * and return a non-zero exit status if at least one test fails.
  */
@@ -632,6 +702,10 @@ int main(void)
         {
             "One-time key consumption",
             test_second_message_rejected_after_one_time_keys
+        },
+        {
+            "Exchange without a curve one-time prekey",
+            test_exchange_without_curve_one_time_prekey
         }
     };
 

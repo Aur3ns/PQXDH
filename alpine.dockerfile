@@ -1,39 +1,31 @@
-FROM alpine:3.22.0
+FROM alpine:3.22 AS builder
 
-# Installing dependencies
-RUN \
-    apk update && \
-    apk upgrade && \
-    apk add --no-cache \
-        astyle \
-        cmake \
-        doxygen \
-        gcc \
-        git \
-        graphviz \
-        libsodium-dev \
-        libxslt \
-        make \
-        musl-dev \
-        ninja-build \
-        openssl-dev \
-        py3-pytest \
-        py3-pytest-xdist \
-        py3-yaml \
-        unzip \
-        valgrind
-WORKDIR /usr/app/
-COPY "." "."
-RUN git submodule update --init
+RUN apk add --no-cache \
+    build-base \
+    cmake \
+    libsodium-dev \
+    ninja \
+    openssl-dev \
+    pkgconf
 
-# Compiling project
-WORKDIR /usr/app/liboqs/build/
-RUN \
-    cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_USE_OPENSSL=ON .. && \
-    make -j$(nproc) && \
-    make install
-WORKDIR /usr/app/
-RUN make
+WORKDIR /usr/src/pqxdh
+COPY . .
 
-# Running tests
-ENTRYPOINT [ "./test_pqxdh" ]
+RUN test -f liboqs/CMakeLists.txt || \
+        (echo "liboqs is missing; initialize submodules before docker build" >&2; exit 1)
+
+RUN cmake \
+        -S liboqs \
+        -B liboqs/build \
+        -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr/local \
+        -DOQS_USE_OPENSSL=ON \
+        -DOQS_BUILD_ONLY_LIB=ON \
+        -DOQS_MINIMAL_BUILD="KEM_ml_kem_1024" && \
+    cmake --build liboqs/build --parallel && \
+    cmake --install liboqs/build && \
+    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build --parallel
+
+ENTRYPOINT ["./build/test_pqxdh"]

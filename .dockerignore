@@ -1,5 +1,11 @@
-**/*.md
-!**/LICENSE.md
-/run.sh
-docker*
-*.dockerfile
+.git
+.github
+build
+build-*
+build-windows-*
+vcpkg_installed
+liboqs/build
+liboqs/build-*
+.deps
+*.o
+test_pqxdh
