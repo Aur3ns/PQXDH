@@ -210,10 +210,9 @@ installed:
 ```
 
 > [!NOTE]
-> The Windows workflow currently reaches the MSVC link stage but still fails to
-> link the embedded libxeddsa objects. Linux, Debian Docker, and Alpine Docker
-> builds pass. Windows support therefore remains work in progress rather than a
-> validated platform.
+> Windows support is validated in GitHub Actions with MSVC and the
+> `x64-windows` vcpkg triplet. The workflow configures the project, builds the
+> library and test executable, then runs all 8 tests successfully.
 
 ## Expected Test Output
 
@@ -251,7 +250,7 @@ Result: 8/8 tests passed.
 | Installed static library consumer | Passed |
 | Clang/libFuzzer smoke run | Passed |
 | GitHub CI, Ubuntu GCC and Clang | Passed |
-| GitHub CI, Windows MSVC | Link failure under investigation |
+| GitHub CI, Windows MSVC and vcpkg | Build passed, 8/8 tests passed |
 
 These checks test implementation behavior, memory-safety instrumentation, and
 build portability. They are not a cryptographic proof, an independent audit, or
