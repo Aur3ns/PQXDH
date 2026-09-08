@@ -305,24 +305,6 @@ cmake --build build-fuzz --parallel
 ./build-fuzz/fuzz_decode_initial_message corpus/
 ```
 
-## Roadmap
-
-The next application target is an educational Android messenger using this
-library through the Android NDK. Nearby devices would exchange encrypted data
-over Bluetooth Low Energy, with a classical X3DH control profile and the PQXDH
-profile measured under the same conditions. Direct peer-to-peer messaging comes
-first; multi-hop mesh routing is a later extension.
-
-Planned work includes:
-
-- persistent identities and fingerprint/QR verification;
-- explicit alerts for authentication failure, replay, and identity changes;
-- a per-message symmetric key chain after PQXDH;
-- Android client and Bluetooth transport;
-- a classical X3DH comparison implementation;
-- reproducible latency, bandwidth, memory, and optional energy benchmarks;
-- a documented threat model and source-level audit.
-
 ## Contributing
 
 Feel free to open an issue or pull request. Changes to cryptographic behavior
